@@ -5,16 +5,18 @@ import os, sys, time
 import numpy as np
 import scipy.linalg as sl, scipy.stats, scipy.special
 
-
 class Gibbs(object):
     def __init__(self, pta, model='gaussian', tdf=4, m=0.01,
-                 vary_df=True, theta_prior='beta', vary_alpha=True, alpha=1e10):
+                 vary_df=True, theta_prior='beta', vary_alpha=True, alpha=1e10, pspin=None):
 
         self.pta = pta
 
         # a-prior outlier probability
         self.mp = m
         self.theta_prior = theta_prior
+
+        # spin period
+        self.pspin = pspin
 
         # vary t-distribution d.o.f
         self.vary_df = vary_df
@@ -31,7 +33,12 @@ class Gibbs(object):
         # auxiliary variable stuff
         self._b = np.zeros(self.pta.get_basis()[0].shape[1])
 
+        # for caching
+        self.TNT = None
+        self.d = None
+
         # outlier stuff
+        self._pout = np.zeros_like(self._residuals)
         self._z = np.zeros_like(self._residuals)
         if not vary_alpha:
             self._alpha = np.ones_like(self._residuals) * alpha
@@ -39,7 +46,7 @@ class Gibbs(object):
             self._alpha = np.ones_like(self._residuals)
         self._theta = self.mp
         self.tdf = tdf
-        if model in ['t', 'mixture']:
+        if model in ['t', 'mixture', 'vvh17']:
             self._z = np.ones_like(self._residuals)
 
     @property
@@ -147,21 +154,25 @@ class Gibbs(object):
         phiinv = self.pta.get_phiinv(params, logdet=False)[0]
         residuals = self._residuals
 
-        d = self.pta.get_TNr(params)[0]
-        TNT = self.pta.get_TNT(params)[0]
+        T = self.pta.get_basis(params)[0]
+        if self.TNT is None and self.d is None:
+            self.TNT = np.dot(T.T, T / Nvec[:,None])
+            self.d = np.dot(T.T, residuals/Nvec)
+        #d = self.pta.get_TNr(params)[0]
+        #TNT = self.pta.get_TNT(params)[0]
 
         # Red noise piece
-        Sigma = TNT + np.diag(phiinv)
+        Sigma = self.TNT + np.diag(phiinv)
 
         try:
             u, s, _ = sl.svd(Sigma)
-            mn = np.dot(u, np.dot(u.T, d)/s)
+            mn = np.dot(u, np.dot(u.T, self.d)/s)
             Li = u * np.sqrt(1/s)
         except np.linalg.LinAlgError:
 
             Q, R = sl.qr(Sigma)
             Sigi = sl.solve(R, Q.T)
-            mn = np.dot(Sigi, d)
+            mn = np.dot(Sigi, self.d)
             u, s, _ = sl.svd(Sigi)
             Li = u * np.sqrt(1/s)
 
@@ -174,7 +185,7 @@ class Gibbs(object):
 
         if self._lmodel in ['t', 'gaussian']:
             return self._theta
-        elif self._lmodel == 'mixture':
+        elif self._lmodel in ['mixture', 'vvh17']:
             n = len(self._residuals)
             if self.theta_prior == 'beta':
                 mk = n * self.mp
@@ -193,19 +204,24 @@ class Gibbs(object):
 
         if self._lmodel in ['t', 'gaussian']:
             return self._z
-        elif self._lmodel == 'mixture':
+        elif self._lmodel in ['mixture', 'vvh17']:
             Nvec0 = self.pta.get_ndiag(params)[0]
-            Nvec = self._alpha**self._z * Nvec0
-
             Tmat = self.pta.get_basis(params)[0]
+
+            Nvec = self._alpha * Nvec0
             theta_mean = np.dot(Tmat, self._b)
-            top = self._theta * scipy.stats.norm.pdf(self._residuals, loc=theta_mean,
-                                                     scale=np.sqrt(self._alpha*Nvec0))
+            top = self._theta * scipy.stats.norm.pdf(self._residuals,
+                                                     loc=theta_mean,
+                                                     scale=np.sqrt(Nvec))
+            if self._lmodel == 'vvh17':
+                top = self._theta / self.pspin
+
             bot = top + (1-self._theta) * scipy.stats.norm.pdf(self._residuals,
                                                                loc=theta_mean,
                                                                scale=np.sqrt(Nvec0))
             q = top / bot
             q[np.isnan(q)] = 1
+            self._pout = q
             return scipy.stats.binom.rvs(1, map(lambda x: min(x, 1), q))
 
 
@@ -252,7 +268,8 @@ class Gibbs(object):
         Tmat = self.pta.get_basis(params)[0]
 
         # whitened residuals
-        yred = self._residuals - np.dot(Tmat, self._b)
+        mn = np.dot(Tmat, self._b)
+        yred = self._residuals - mn
 
         # log determinant of N
         logdet_N = np.sum(np.log(Nvec))
@@ -280,8 +297,12 @@ class Gibbs(object):
         phiinv, logdet_phi = self.pta.get_phiinv(params, logdet=True)[0]
         residuals = self._residuals
 
-        d = self.pta.get_TNr(params)[0]
-        TNT = self.pta.get_TNT(params)[0]
+        T = self.pta.get_basis(params)[0]
+        if self.TNT is None and self.d is None:
+            self.TNT = np.dot(T.T, T / Nvec[:,None])
+            self.d = np.dot(T.T, residuals/Nvec)
+        #d = self.pta.get_TNr(params)[0]
+        #TNT = self.pta.get_TNT(params)[0]
 
         # log determinant of N
         logdet_N = np.sum(np.log(Nvec))
@@ -293,16 +314,16 @@ class Gibbs(object):
         loglike += -0.5 * (logdet_N + rNr)
 
         # Red noise piece
-        Sigma = TNT + np.diag(phiinv)
+        Sigma = self.TNT + np.diag(phiinv)
 
         try:
             cf = sl.cho_factor(Sigma)
-            expval = sl.cho_solve(cf, d)
+            expval = sl.cho_solve(cf, self.d)
         except np.linalg.LinAlgError:
             return -np.inf
 
         logdet_sigma = np.sum(2 * np.log(np.diag(cf[0])))
-        loglike += 0.5 * (np.dot(d, expval) - logdet_sigma - logdet_phi)
+        loglike += 0.5 * (np.dot(self.d, expval) - logdet_sigma - logdet_phi)
 
         return loglike
 
@@ -324,6 +345,7 @@ class Gibbs(object):
         self.thetachain = np.zeros(niter)
         self.zchain = np.zeros((niter, len(self._residuals)))
         self.alphachain = np.zeros((niter, len(self._residuals)))
+        self.poutchain = np.zeros((niter, len(self._residuals)))
         self.dfchain = np.zeros(niter)
 
         xnew = xs
@@ -335,6 +357,10 @@ class Gibbs(object):
             self.thetachain[ii] = self._theta
             self.alphachain[ii,:] = self._alpha
             self.dfchain[ii] = self.tdf
+            self.poutchain[ii, :] = self._pout
+
+            self.TNT = None
+            self.d = None
 
             # update white parameters
             xnew = self.update_white_params(xnew)
