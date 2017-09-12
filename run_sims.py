@@ -20,75 +20,78 @@ from enterprise.signals import signal_base
 parfile = 'J1713+0747.par'
 timfile = 'J1713+0747.tim'
 
-# simulate data
-idx = random.getrandbits(32)
-simulate_data(parfile, timfile, idx)
+thetas = [0.0, 0.05, 0.15]
+for theta in thetas:
 
-# grab simulated data
-simparfile = 'simulated_data/outliers/{}/J1713+0747.par'.format(idx)
-simtimfile = 'simulated_data/outliers/{}/J1713+0747.tim'.format(idx)
-psr = Pulsar(simparfile, simtimfile)
+    # simulate data
+    idx = random.getrandbits(32)
+    simulate_data(parfile, timfile, theta=theta, idx=idx)
 
-## Set up enterprise model ##
+    # grab simulated data
+    simparfile = 'simulated_data/outliers/{}/{}/J1713+0747.par'.format(theta, idx)
+    simtimfile = 'simulated_data/outliers/{}/{}/J1713+0747.tim'.format(theta, idx)
+    psr = Pulsar(simparfile, simtimfile)
 
-# white noise
-efac = parameter.Constant(1.0)
-equad = parameter.Uniform(-10, -5)
-ecorr = parameter.Uniform(-10, -5)
+    ## Set up enterprise model ##
 
-# backend selection
-selection = selections.Selection(selections.no_selection)
+    # white noise
+    efac = parameter.Constant(1.0)
+    equad = parameter.Uniform(-10, -5)
+    ecorr = parameter.Uniform(-10, -5)
 
-ef = white_signals.MeasurementNoise(efac=efac, selection=selection)
-eq = white_signals.EquadNoise(log10_equad=equad, selection=selection)
+    # backend selection
+    selection = selections.Selection(selections.no_selection)
 
-# red noise
-pl = utils.powerlaw(log10_A=parameter.Uniform(-18,-12), gamma=parameter.Uniform(1,7))
-rn = gp_signals.FourierBasisGP(spectrum=pl, components=30)
+    ef = white_signals.MeasurementNoise(efac=efac, selection=selection)
+    eq = white_signals.EquadNoise(log10_equad=equad, selection=selection)
 
-# timing model
-tm = gp_signals.TimingModel()
+    # red noise
+    pl = utils.powerlaw(log10_A=parameter.Uniform(-18,-12), gamma=parameter.Uniform(1,7))
+    rn = gp_signals.FourierBasisGP(spectrum=pl, components=30)
 
-# combined signal
-s = ef + eq  + rn + tm
+    # timing model
+    tm = gp_signals.TimingModel()
 
-# PTA
-pta = signal_base.PTA([s(psr)])
+    # combined signal
+    s = ef + eq  + rn + tm
 
-## Set up different outlier models ##
-mdls = {}
+    # PTA
+    pta = signal_base.PTA([s(psr)])
 
-# emulate Vallisneri and van Haasteren mixture model
-gibbs = Gibbs(pta, model='vvh17', vary_df=False, theta_prior='uniform',
-               vary_alpha=False, alpha=1e10, pspin=0.00457)
-mdls['vvh17'] = gibbs
+    ## Set up different outlier models ##
+    mdls = {}
 
-# uniform theta distribution
-gibbs = Gibbs(pta, model='mixture', vary_df=True, theta_prior='uniform')
-mdls['uniform'] = gibbs
+    # emulate Vallisneri and van Haasteren mixture model
+    gibbs = Gibbs(pta, model='vvh17', vary_df=False, theta_prior='uniform',
+                   vary_alpha=False, alpha=1e10, pspin=0.00457)
+    mdls['vvh17'] = gibbs
 
-# beta theta distribution
-gibbs = Gibbs(pta, model='mixture', vary_df=True, theta_prior='beta')
-mdls['beta'] = gibbs
+    # uniform theta distribution
+    gibbs = Gibbs(pta, model='mixture', vary_df=True, theta_prior='uniform')
+    mdls['uniform'] = gibbs
 
-# Gaussian
-gibbs = Gibbs(pta, model='gaussian', vary_df=True, theta_prior='beta')
-mdls['gaussian'] = gibbs
+    # beta theta distribution
+    gibbs = Gibbs(pta, model='mixture', vary_df=True, theta_prior='beta')
+    mdls['beta'] = gibbs
 
-# t-distribution
-gibbs = Gibbs(pta, model='t', vary_df=True, theta_prior='beta')
-mdls['t'] = gibbs
+    # Gaussian
+    gibbs = Gibbs(pta, model='gaussian', vary_df=True, theta_prior='beta')
+    mdls['gaussian'] = gibbs
 
-# sample and ouput chains
-for key, md in list(mdls.items()):
-    params = np.array([p.sample() for p in md.params]).flatten()
-    niter = 10000
-    md.sample(params, niter=niter)
-    os.system('mkdir -p output/{}/{}/'.format(key, idx))
+    # t-distribution
+    gibbs = Gibbs(pta, model='t', vary_df=True, theta_prior='beta')
+    mdls['t'] = gibbs
 
-    np.save('output/{}/{}/chain.npy'.format(key, idx), md.chain[100:,:])
-    np.save('output/{}/{}/bchain.npy'.format(key, idx), md.bchain[100:,:])
-    np.save('output/{}/{}/zchain.npy'.format(key, idx), md.zchain[100:,:])
-    np.save('output/{}/{}/thetachain.npy'.format(key, idx), md.thetachain[100:])
-    np.save('output/{}/{}/alphachain.npy'.format(key, idx), md.alphachain[100:,:])
-    np.save('output/{}/{}/dfchain.npy'.format(key, idx), md.dfchain[100:])
+    # sample and ouput chains
+    for key, md in list(mdls.items()):
+        params = np.array([p.sample() for p in md.params]).flatten()
+        niter = 10000
+        md.sample(params, niter=niter)
+        os.system('mkdir -p output/{}/{}/'.format(key, idx))
+
+        np.save('output/{}/{}/chain.npy'.format(key, idx), md.chain[100:,:])
+        np.save('output/{}/{}/bchain.npy'.format(key, idx), md.bchain[100:,:])
+        np.save('output/{}/{}/zchain.npy'.format(key, idx), md.zchain[100:,:])
+        np.save('output/{}/{}/thetachain.npy'.format(key, idx), md.thetachain[100:])
+        np.save('output/{}/{}/alphachain.npy'.format(key, idx), md.alphachain[100:,:])
+        np.save('output/{}/{}/dfchain.npy'.format(key, idx), md.dfchain[100:])

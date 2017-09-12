@@ -10,7 +10,7 @@ import os
 parfile = 'J1713+0747.par'
 timfile = 'J1713+0747.tim'
 
-def simulate_data(parfile, timfile, idx=0):
+def simulate_data(parfile, timfile, theta=0.05, idx=0):
 
     pt = t2.tempopulsar(parfile, timfile)
 
@@ -21,18 +21,17 @@ def simulate_data(parfile, timfile, idx=0):
     psr = ts.fakepulsar(parfile, pt.stoas[:], err)
 
     # red noise
-    red = np.loadtxt('red.txt')
-    psr.stoas[:] += red
+    ts.add_rednoise(psr, 1e-14, 4.33, components=30)
 
     # outlier
     sigma_out = 1e-6
-    theta = 0.05
+    theta = theta
     z = scipy.stats.binom.rvs(1, np.ones(len(psr.stoas))*theta)
 
     psr.stoas[:] += ((1-z) * err*1e-6 + z * sigma_out) * np.random.randn(len(psr.stoas)) / 86400
-    psr.stoas[:][z.astype(bool)] -= red[z.astype(bool)]
 
-    outdir = 'simulated_data/outliers/{}/'.format(idx)
+    outdir = 'simulated_data/outliers/{}/{}/'.format(theta, idx)
     os.system('mkdir -p {}'.format(outdir))
+    np.savetxt('{}/outliers.txt'.format(outdir), np.flatnonzero(z), fmt='%d')
     psr.savepar(outdir+'{}.par'.format(psr.name))
     psr.savetim(outdir+'{}.tim'.format(psr.name))
