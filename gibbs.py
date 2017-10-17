@@ -7,7 +7,8 @@ import scipy.linalg as sl, scipy.stats, scipy.special
 
 class Gibbs(object):
     def __init__(self, pta, model='gaussian', tdf=4, m=0.01,
-                 vary_df=True, theta_prior='beta', vary_alpha=True, alpha=1e10, pspin=None):
+                 vary_df=True, theta_prior='beta', vary_alpha=True,
+                 alpha=1e10, pspin=None):
 
         self.pta = pta
 
